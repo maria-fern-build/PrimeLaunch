@@ -1,12 +1,10 @@
 import { useState } from 'react';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 
-import { FACTORY_ADDRESS } from '../config/contracts';
 import { TokenCreationForm } from './TokenCreationForm';
 import { TokenList } from './TokenList';
 import '../styles/PrimeLaunchApp.css';
 
-const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 export function PrimeLaunchApp() {
   const [refreshKey, setRefreshKey] = useState(0);
@@ -34,12 +32,12 @@ export function PrimeLaunchApp() {
           </div>
         </section>
 
-        {FACTORY_ADDRESS === ZERO_ADDRESS && (
+
           <div className="warning-state" style={{ marginTop: '1rem' }}>
             Update <code>FACTORY_ADDRESS</code> in <code>src/config/contracts.ts</code> once the factory is deployed on
             Sepolia.
           </div>
-        )}
+
 
         <div className="launchpad-grid">
           <TokenCreationForm onCreated={handleRefresh} />

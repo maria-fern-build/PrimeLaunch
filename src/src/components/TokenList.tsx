@@ -1,10 +1,12 @@
 import { Contract } from 'ethers';
 import { useEffect, useMemo, useState } from 'react';
 import { useAccount, useReadContract } from 'wagmi';
+import { createInstance, initSDK, SepoliaConfig } from '@zama-fhe/relayer-sdk';
 
 import { FACTORY_ABI, FACTORY_ADDRESS, TOKEN_ABI } from '../config/contracts';
 import { useEthersSigner } from '../hooks/useEthersSigner';
 
+type FheInstance = Awaited<ReturnType<typeof createInstance>>;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const formatAmount = (value: bigint) => value.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
@@ -31,15 +33,12 @@ export function TokenList({ refreshKey }: TokenListProps) {
     abi: FACTORY_ABI,
     functionName: 'getAllTokens',
     query: {
-      enabled: FACTORY_ADDRESS !== ZERO_ADDRESS,
+      enabled: true,
       refetchInterval: 20000,
     },
   });
 
   useEffect(() => {
-    if (FACTORY_ADDRESS === ZERO_ADDRESS) {
-      return;
-    }
     refetch();
   }, [refreshKey, refetch]);
 
@@ -72,17 +71,6 @@ export function TokenList({ refreshKey }: TokenListProps) {
     setActionMessage(message);
     setTimeout(() => setActionMessage(''), 6000);
   };
-
-  if (FACTORY_ADDRESS === ZERO_ADDRESS) {
-    return (
-      <div className="tokens-section">
-        <div className="panel-card warning-state">
-          PrimeLaunchFactory is not configured yet. Update <code>FACTORY_ADDRESS</code> once the
-          contract is deployed on Sepolia.
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="tokens-section">
@@ -144,9 +132,23 @@ type TokenCardProps = {
 };
 
 function TokenCard({ token, signerPromise, onMinted, shortAddress }: TokenCardProps) {
+  const { address } = useAccount();
+  const balanceArgs = address ? [address as `0x${string}`] : [ZERO_ADDRESS as `0x${string}`];
+  const { data: encryptedBalance, isPending: isBalancePending, refetch: refetchBalance } = useReadContract({
+    address: token.token,
+    abi: TOKEN_ABI,
+    functionName: 'confidentialBalanceOf',
+    args: balanceArgs,
+    query: { enabled: Boolean(address) },
+  });
+
   const [mintAmount, setMintAmount] = useState('1000');
   const [isMinting, setIsMinting] = useState(false);
   const [error, setError] = useState('');
+  const [decryptedBalance, setDecryptedBalance] = useState('');
+  const [decryptError, setDecryptError] = useState('');
+  const [isDecrypting, setIsDecrypting] = useState(false);
+  const [fheInstancePromise, setFheInstancePromise] = useState<Promise<FheInstance> | null>(null);
 
   const formattedDate = token.createdAt
     ? new Date(token.createdAt * 1000).toLocaleString()
@@ -170,6 +172,7 @@ function TokenCard({ token, signerPromise, onMinted, shortAddress }: TokenCardPr
       await contract.freemint(BigInt(mintAmount));
       onMinted(`Minted ${mintAmount} ${token.symbol} to your wallet.`);
       setMintAmount('1000');
+      await refetchBalance();
     } catch (err) {
       console.error('Failed to mint', err);
       setError(err instanceof Error ? err.message : 'Mint failed');
@@ -177,6 +180,81 @@ function TokenCard({ token, signerPromise, onMinted, shortAddress }: TokenCardPr
       setIsMinting(false);
     }
   };
+
+  const loadFheInstance = () => {
+    if (fheInstancePromise) {
+      return fheInstancePromise;
+    }
+    const promise = (async () => {
+      await initSDK();
+      const config = { ...SepoliaConfig, network: (window as any).ethereum };
+      return await createInstance(config);
+    })();
+    setFheInstancePromise(promise);
+    return promise;
+  };
+
+  const handleDecrypt = async () => {
+    if (!address) {
+      setDecryptError('Connect your wallet to decrypt.');
+      return;
+    }
+    if (!signerPromise) {
+      setDecryptError('Connect your wallet to decrypt.');
+      return;
+    }
+    if (!encryptedBalance) {
+      setDecryptError('Encrypted balance is not available yet.');
+      return;
+    }
+
+    try {
+      setIsDecrypting(true);
+      setDecryptError('');
+      const signer = await signerPromise;
+      const instance = await loadFheInstance();
+      const keypair = instance.generateKeypair();
+
+      const handle = String(encryptedBalance);
+      const contractAddress = token.token;
+      const startTimeStamp = Math.floor(Date.now() / 1000).toString();
+      const durationDays = '10';
+
+      const eip712 = instance.createEIP712(keypair.publicKey, [contractAddress], startTimeStamp, durationDays);
+      const signature = await signer.signTypedData(
+        eip712.domain,
+        { UserDecryptRequestVerification: eip712.types.UserDecryptRequestVerification },
+        eip712.message
+      );
+
+      const result = await instance.userDecrypt(
+        [{ handle, contractAddress }],
+        keypair.privateKey,
+        keypair.publicKey,
+        signature.replace('0x', ''),
+        [contractAddress],
+        signer.address,
+        startTimeStamp,
+        durationDays
+      );
+
+      const clearValue = result[handle];
+      setDecryptedBalance(typeof clearValue === 'bigint' ? clearValue.toString() : String(clearValue));
+    } catch (err) {
+      console.error('Failed to decrypt', err);
+      setDecryptError(err instanceof Error ? err.message : 'Failed to decrypt balance');
+    } finally {
+      setIsDecrypting(false);
+    }
+  };
+
+  const encryptedBalanceLabel = encryptedBalance
+    ? String(encryptedBalance)
+    : address
+      ? isBalancePending
+        ? 'Fetching...'
+        : 'Unavailable'
+      : 'Connect wallet';
 
   return (
     <div className="token-card">
@@ -191,6 +269,27 @@ function TokenCard({ token, signerPromise, onMinted, shortAddress }: TokenCardPr
       </p>
       <p className="token-meta">Initial supply: {formatAmount(token.initialSupply)}</p>
       <p className="token-meta">Deployed: {formattedDate}</p>
+      <div className="token-meta" style={{ marginTop: '0.5rem' }}>
+        Encrypted balance: <code style={{ wordBreak: 'break-all' }}>{encryptedBalanceLabel}</code>
+      </div>
+      {decryptedBalance && (
+        <div className="status-banner status-success" style={{ marginTop: '0.65rem' }}>
+          Decrypted balance: {decryptedBalance}
+        </div>
+      )}
+      {decryptError && (
+        <div className="status-banner status-error" style={{ marginTop: '0.65rem' }}>
+          {decryptError}
+        </div>
+      )}
+      <button
+        className="secondary-button"
+        style={{ marginTop: '0.75rem' }}
+        onClick={handleDecrypt}
+        disabled={isDecrypting || !address || !encryptedBalance || isBalancePending}
+      >
+        {isDecrypting ? 'Decrypting...' : 'Decrypt balance'}
+      </button>
 
       <div className="token-footer">
         <label style={{ fontWeight: 600 }}>Freemint amount</label>

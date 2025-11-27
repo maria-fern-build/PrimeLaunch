@@ -1,11 +1,11 @@
-import { FormEvent, useState } from 'react';
+import {  useState } from 'react';
+import type { FormEvent } from 'react';
 import { useAccount } from 'wagmi';
 import { Contract } from 'ethers';
 
 import { useEthersSigner } from '../hooks/useEthersSigner';
 import { DEFAULT_SUPPLY, FACTORY_ABI, FACTORY_ADDRESS } from '../config/contracts';
 
-const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 
 type TokenCreationFormProps = {
   onCreated: () => void;
@@ -25,7 +25,6 @@ export function TokenCreationForm({ onCreated }: TokenCreationFormProps) {
     !address ||
     !name.trim() ||
     !symbol.trim() ||
-    FACTORY_ADDRESS === ZERO_ADDRESS ||
     isDeploying;
 
   const defaultSupplyLabel = DEFAULT_SUPPLY.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
