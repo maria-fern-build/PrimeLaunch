@@ -142,7 +142,9 @@ type TokenCardProps = {
 
 function TokenCard({ token, signerPromise, onMinted, zamaInstance, isZamaLoading, zamaError, shortAddress }: TokenCardProps) {
   const { address } = useAccount();
-  const balanceArgs = address ? [address as `0x${string}`] : [ZERO_ADDRESS as `0x${string}`];
+  const balanceArgs = (address ? [address as `0x${string}`] : [ZERO_ADDRESS as `0x${string}`]) satisfies readonly [
+    `0x${string}`,
+  ];
   const { data: encryptedBalance, isPending: isBalancePending, refetch: refetchBalance } = useReadContract({
     address: token.token,
     abi: TOKEN_ABI,
