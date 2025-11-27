@@ -1,12 +1,11 @@
 import { Contract } from 'ethers';
 import { useEffect, useMemo, useState } from 'react';
 import { useAccount, useReadContract } from 'wagmi';
-import { createInstance, initSDK, SepoliaConfig } from '@zama-fhe/relayer-sdk';
 
 import { FACTORY_ABI, FACTORY_ADDRESS, TOKEN_ABI } from '../config/contracts';
 import { useEthersSigner } from '../hooks/useEthersSigner';
+import { useZamaInstance } from '../hooks/useZamaInstance';
 
-type FheInstance = Awaited<ReturnType<typeof createInstance>>;
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000';
 const formatAmount = (value: bigint) => value.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
@@ -27,6 +26,7 @@ export function TokenList({ refreshKey }: TokenListProps) {
   const { address } = useAccount();
   const signerPromise = useEthersSigner();
   const [actionMessage, setActionMessage] = useState('');
+  const zama = useZamaInstance();
 
   const { data, isPending, refetch } = useReadContract({
     address: FACTORY_ADDRESS as `0x${string}`,
@@ -90,6 +90,9 @@ export function TokenList({ refreshKey }: TokenListProps) {
                 token={token}
                 signerPromise={signerPromise}
                 onMinted={handleMintResult}
+                zamaInstance={zama.instance}
+                isZamaLoading={zama.isLoading}
+                zamaError={zama.error}
                 shortAddress={shortAddress}
               />
             ))}
@@ -112,6 +115,9 @@ export function TokenList({ refreshKey }: TokenListProps) {
                 token={token}
                 signerPromise={signerPromise}
                 onMinted={handleMintResult}
+                zamaInstance={zama.instance}
+                isZamaLoading={zama.isLoading}
+                zamaError={zama.error}
                 shortAddress={shortAddress}
               />
             ))}
@@ -128,10 +134,13 @@ type TokenCardProps = {
   token: TokenInfo;
   signerPromise?: ReturnType<typeof useEthersSigner>;
   onMinted: (message: string) => void;
+  zamaInstance: any;
+  isZamaLoading: boolean;
+  zamaError: string | null;
   shortAddress: (value: string) => string;
 };
 
-function TokenCard({ token, signerPromise, onMinted, shortAddress }: TokenCardProps) {
+function TokenCard({ token, signerPromise, onMinted, zamaInstance, isZamaLoading, zamaError, shortAddress }: TokenCardProps) {
   const { address } = useAccount();
   const balanceArgs = address ? [address as `0x${string}`] : [ZERO_ADDRESS as `0x${string}`];
   const { data: encryptedBalance, isPending: isBalancePending, refetch: refetchBalance } = useReadContract({
@@ -148,7 +157,6 @@ function TokenCard({ token, signerPromise, onMinted, shortAddress }: TokenCardPr
   const [decryptedBalance, setDecryptedBalance] = useState('');
   const [decryptError, setDecryptError] = useState('');
   const [isDecrypting, setIsDecrypting] = useState(false);
-  const [fheInstancePromise, setFheInstancePromise] = useState<Promise<FheInstance> | null>(null);
 
   const formattedDate = token.createdAt
     ? new Date(token.createdAt * 1000).toLocaleString()
@@ -181,19 +189,6 @@ function TokenCard({ token, signerPromise, onMinted, shortAddress }: TokenCardPr
     }
   };
 
-  const loadFheInstance = () => {
-    if (fheInstancePromise) {
-      return fheInstancePromise;
-    }
-    const promise = (async () => {
-      await initSDK();
-      const config = { ...SepoliaConfig, network: (window as any).ethereum };
-      return await createInstance(config);
-    })();
-    setFheInstancePromise(promise);
-    return promise;
-  };
-
   const handleDecrypt = async () => {
     if (!address) {
       setDecryptError('Connect your wallet to decrypt.');
@@ -201,6 +196,10 @@ function TokenCard({ token, signerPromise, onMinted, shortAddress }: TokenCardPr
     }
     if (!signerPromise) {
       setDecryptError('Connect your wallet to decrypt.');
+      return;
+    }
+    if (!zamaInstance) {
+      setDecryptError(isZamaLoading ? 'Initializing encryption service...' : zamaError ?? 'Encryption unavailable');
       return;
     }
     if (!encryptedBalance) {
@@ -212,22 +211,21 @@ function TokenCard({ token, signerPromise, onMinted, shortAddress }: TokenCardPr
       setIsDecrypting(true);
       setDecryptError('');
       const signer = await signerPromise;
-      const instance = await loadFheInstance();
-      const keypair = instance.generateKeypair();
+      const keypair = zamaInstance.generateKeypair();
 
       const handle = String(encryptedBalance);
       const contractAddress = token.token;
       const startTimeStamp = Math.floor(Date.now() / 1000).toString();
       const durationDays = '10';
 
-      const eip712 = instance.createEIP712(keypair.publicKey, [contractAddress], startTimeStamp, durationDays);
+      const eip712 = zamaInstance.createEIP712(keypair.publicKey, [contractAddress], startTimeStamp, durationDays);
       const signature = await signer.signTypedData(
         eip712.domain,
         { UserDecryptRequestVerification: eip712.types.UserDecryptRequestVerification },
         eip712.message
       );
 
-      const result = await instance.userDecrypt(
+      const result = await zamaInstance.userDecrypt(
         [{ handle, contractAddress }],
         keypair.privateKey,
         keypair.publicKey,

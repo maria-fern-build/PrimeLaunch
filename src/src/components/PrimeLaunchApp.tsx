@@ -33,10 +33,10 @@ export function PrimeLaunchApp() {
         </section>
 
 
-          <div className="warning-state" style={{ marginTop: '1rem' }}>
+          {/* <div className="warning-state" style={{ marginTop: '1rem' }}>
             Update <code>FACTORY_ADDRESS</code> in <code>src/config/contracts.ts</code> once the factory is deployed on
             Sepolia.
-          </div>
+          </div> */}
 
 
         <div className="launchpad-grid">
